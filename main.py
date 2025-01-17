@@ -1,17 +1,6 @@
 import warnings
 import os
 from tqdm import tqdm
-
-warnings.filterwarnings("ignore")
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-from transformers import T5ForConditionalGeneration, AutoTokenizer
-
-from torch.utils.data import DataLoader
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from transformers import AdamW, get_linear_schedule_with_warmup
-
 import os
 import pandas as pd
 import numpy as np
@@ -19,19 +8,27 @@ import random
 import os
 import argparse
 
+warnings.filterwarnings("ignore")
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-from transformers import AdamW
-from arabert.preprocess import ArabertPreprocessor
-from transformers import AutoTokenizer
+from torch.utils.data import DataLoader
+import pandas as pd
+from transformers import T5ForConditionalGeneration, AutoTokenizer, AdamW, get_linear_schedule_with_warmup
 from sklearn.model_selection import train_test_split
 from rouge import Rouge
 
 from data import MultiTaskDataset
 from model import *
-
 from logger import Logger
+
+
+WEIGHTING_SETTING = {
+    "0": "static",
+    "1": "relative",
+    "2": "grad"
+}
 
 def evaluate_model(model, dataloader, tokenizer, args, logger, max_summary_length=40):
     model.eval()
@@ -102,7 +99,6 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, max_summary_lengt
     avg_abstractive_rouge_2 = sum(abstractive_rouge_2_scores) / len(abstractive_rouge_2_scores) if abstractive_rouge_2_scores else 0
     avg_abstractive_rouge_l = sum(abstractive_rouge_l_scores) / len(abstractive_rouge_l_scores) if abstractive_rouge_l_scores else 0
 
-    # Print results
     logger("QA ROUGE Scores:")
     logger(f"  - ROUGE-1: {avg_qa_rouge_1}")
     logger(f"  - ROUGE-2: {avg_qa_rouge_2}")
@@ -128,21 +124,25 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, max_summary_lengt
 
 def train(
         model, 
-        train_dataloader, 
-        valid_dataloader, 
-        tokenizer, 
-        optimizer_main, 
+        train_dataloader,
+        valid_dataloader,
+        tokenizer,
+        optimizer_main,
         scheduler, 
+
         qa_loss_weight, 
         summarization_loss_weight, 
+
         args,
         logger,
+
         num_epochs=20, 
         max_grad_norm=1.0, 
-        eval_accumulation_steps=None
+        eval_accumulation_steps=None,
+
+        omega=None,
+        omega_optim=None
     ):
-    
-    model.to(args.device)
 
     best_abstractive_rougel = 0
     stagnant_epochs_abstractive = 0
@@ -195,16 +195,16 @@ def train(
                     task='abstractive'
                 )
                 abstractive_loss = abstractive_outputs.loss
-                total_loss_abstractive += abstractive_loss.item()  # Accumulate weighted Abstractive loss for the epoch
+                total_loss_abstractive += abstractive_loss.item()
 
             total_loss = (qa_loss_weight * qa_loss) + (summarization_loss_weight * abstractive_loss)
             total_loss.backward()
 
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
 
             if eval_accumulation_steps is None or (step + 1) % eval_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
                 optimizer_main.step()
-                scheduler.step()  # Update the learning rate scheduler
+                scheduler.step()
                 optimizer_main.zero_grad()
 
         rouge_scores = evaluate_model(model, valid_dataloader, tokenizer, args, logger)
@@ -212,7 +212,6 @@ def train(
             logger("Skipping evaluation due to errors.")
             continue
 
-        # Check for improvement in abstractive task
         current_abstractive_rougel = rouge_scores["abstractive"]["rouge-l"]
         if current_abstractive_rougel > best_abstractive_rougel:
             best_abstractive_rougel = current_abstractive_rougel
@@ -222,11 +221,10 @@ def train(
 
         if stagnant_epochs_abstractive >= 3:
             logger("Early stopping as abstractive task has not improved for 3 consecutive epochs.")
-            return model  # Stop training entirely
+            return model
 
         logger(f"Epoch [{epoch+1}/{num_epochs}] - QA Loss: {total_loss_qa:.4f} - Abstractive Loss: {total_loss_abstractive:.4f}")
         logger("=================================\n")
-
 
 
 
@@ -251,6 +249,9 @@ def main(args):
     
 
     output_file = f"./outputs/{args.model}_aw{args.abstractive_weight}_ew{args.extractive_weight}_bs{args.batch_size}.txt"
+    if os.path.exists(output_file):
+        os.remove(output_file)
+
     logger = Logger(output_file)
     logger("CONFIGS:")
     logger(f"Model: {args.model}")
@@ -264,7 +265,7 @@ def main(args):
     # MODEL LOADING -------------------------------------
     model_name = "UBC-NLP/AraT5-base"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True))
+    model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
 
     optimizer = AdamW(model.parameters(), lr = 5e-5)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=3000, num_training_steps=66000)
@@ -280,6 +281,10 @@ def main(args):
     train_data_ext, temp_data_ext = train_test_split(ext_data, test_size=0.1, random_state=42)
     valid_data_ext, test_data_ext = train_test_split(temp_data_ext, test_size=0.5, random_state=42)
 
+    # keep 5000 samples for training 
+    train_data_abs = train_data_abs[:5000]
+    train_data_ext = train_data_ext[:5000]
+
     train_dataset = MultiTaskDataset(tokenizer, qa_data=train_data_ext, summarization_data=train_data_abs)
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
@@ -291,7 +296,7 @@ def main(args):
 
     ood_dataset = MultiTaskDataset(tokenizer, qa_data=None, summarization_data=ood_data)
     ood_dataloader = DataLoader(ood_dataset, batch_size=args.batch_size, shuffle=False)
-
+    
     logger("Data loaded successfully")
     logger(f"EXTRACTIVE TRAIN DATA:{train_data_abs.shape}")
     logger(f"EXTRACTIVE VALID DATA:{valid_data_abs.shape}")
@@ -302,10 +307,18 @@ def main(args):
     logger(f"ABSTRACTIVE TEST DATA:{test_data_ext.shape}")
     logger("\n")
     logger(f"OOD DATA:{ood_data.shape}")
-    logger("===============================================\n")
     # DATA LOADING --------------------------------------
 
     logger("\nTraining=====================================\n")
+
+    omega, optimizer_omega = None, None
+    if WEIGHTING_SETTING[args.weighting_setting] == "relative":
+        omega = nn.Parameter(torch.tensor(1, dtype=torch.float), requires_grad=True)
+        optimizer_omega = torch.optim.AdamW([omega], lr=5e-6)
+    elif WEIGHTING_SETTING[args.weighting_setting] == "grad":
+        omega = nn.Parameter(torch.tensor([1.0, 1.0]), requires_grad=True)
+        optimizer_omega = AdamW([omega], lr=5e-6)
+
     train(
         model, 
         train_dataloader, 
@@ -317,7 +330,9 @@ def main(args):
         args.extractive_weight, 
         args,
         logger,
-        num_epochs=args.epochs
+        num_epochs=args.epochs,
+        omega=omega,
+        omega_optim=optimizer_omega
     )
 
     logger("\n========================================\n")
@@ -327,19 +342,15 @@ def main(args):
     logger("\n========================================\n")
     logger("Evaluating on OOD Data")
     evaluate_model(model, ood_dataloader, tokenizer, args, logger)
-    
-
-    
-
-    
 
     
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--model',dest='model', default='parallel')
-    parser.add_argument('--abstractive_weight', dest='abstractive_weight', default='1')
-    parser.add_argument('--extractive_weight', dest='extractive_weight', default='1')
+    parser.add_argument('--weighting_setting', dest='weighting_setting', default='0')
+    parser.add_argument('--abstractive_weight', dest='abstractive_weight', default='0.4')
+    parser.add_argument('--extractive_weight', dest='extractive_weight', default='0.6')
     parser.add_argument('--batch_size', dest='batch_size', default='8')
     parser.add_argument('--epochs', dest='epochs', default='20')
     parser.add_argument('--device', dest='device', default='cuda')

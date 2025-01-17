@@ -1,23 +1,26 @@
 CONFIGS:
 Model: parallel
-Abstractive Weight: 1.0
-Extractive Weight: 1.0
+Abstractive Weight: 0.6
+Extractive Weight: 0.4
 Batch Size: 8
 Epochs: 20
 Device: mps
 ===============================================
 
 Data loaded successfully
-EXTRACTIVE TRAIN DATA:(75815, 11)
+EXTRACTIVE TRAIN DATA:(5000, 11)
 EXTRACTIVE VALID DATA:(4624, 11)
 EXTRACTIVE TEST DATA:(4173, 11)
 
 
-ABSTRACTIVE TRAIN DATA:(16429, 4)
+ABSTRACTIVE TRAIN DATA:(5000, 4)
 ABSTRACTIVE VALID DATA:(913, 4)
 ABSTRACTIVE TEST DATA:(913, 4)
 
 
 OOD DATA:(644, 11)
 ===============================================
+
+
+Training=====================================
 

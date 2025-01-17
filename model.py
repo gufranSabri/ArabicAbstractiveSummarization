@@ -26,6 +26,9 @@ class AraT5_PMTL(nn.Module):
         )
         
     def generate(self, **kwargs):
+        task = kwargs.get("task", None)
+        kwargs.pop("task", None)
+
         self.model.lm_head = self.lm_head_extractive if task == "qa" else self.lm_head_abstractive
         return self.model.generate(**kwargs)
     

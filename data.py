@@ -22,11 +22,11 @@ class MultiTaskDataset(Dataset):
         passage, answer, task = self.data[index]
 
         if task == 'qa' or task == 'abstractive':
-            input_text = "summarize: " + passage
+            input_text = "تلخيص: " + passage
             target_text = answer
         else:
             raise ValueError("Task must be 'qa' or 'abstractive'")
-
+        
         input_encoding = self.tokenizer(
             input_text,
             max_length=self.max_length,

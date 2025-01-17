@@ -1,0 +1,9 @@
+CONFIGS:
+Model: parallel
+Abstractive Weight: 0.8
+Extractive Weight: 0.2
+Batch Size: 8
+Epochs: 20
+Device: mps
+===============================================
+
