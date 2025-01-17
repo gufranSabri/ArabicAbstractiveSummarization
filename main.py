@@ -154,6 +154,7 @@ def train(
 
         for step, batch in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")):
             optimizer_main.zero_grad()
+            if omega_optim is not None: omega_optim.zero_grad()
 
             qa_inputs = {"input_ids": [], "attention_mask": [], "labels": [], "decoder_attention_mask": []}
             abstractive_inputs = {"input_ids": [], "attention_mask": [], "labels": [], "decoder_attention_mask": []}
@@ -197,7 +198,10 @@ def train(
                 abstractive_loss = abstractive_outputs.loss
                 total_loss_abstractive += abstractive_loss.item()
 
-            total_loss = (qa_loss_weight * qa_loss) + (summarization_loss_weight * abstractive_loss)
+            if omega_optim is not None:
+                total_loss = (omega * abstractive_loss) + ((omega / 2) * qa_loss)
+            else:    
+                total_loss = (qa_loss_weight * qa_loss) + (summarization_loss_weight * abstractive_loss)
             total_loss.backward()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -206,6 +210,10 @@ def train(
                 optimizer_main.step()
                 scheduler.step()
                 optimizer_main.zero_grad()
+
+                if omega_optim is not None:
+                    omega_optim.step()
+                    omega_optim.zero_grad()
 
         rouge_scores = evaluate_model(model, valid_dataloader, tokenizer, args, logger)
         if rouge_scores is None:
@@ -223,7 +231,7 @@ def train(
             logger("Early stopping as abstractive task has not improved for 3 consecutive epochs.")
             return model
 
-        logger(f"Epoch [{epoch+1}/{num_epochs}] - QA Loss: {total_loss_qa:.4f} - Abstractive Loss: {total_loss_abstractive:.4f}")
+        logger(f"Epoch [{epoch+1}/{num_epochs}] - QA Loss: {total_loss_qa/len(train_dataloader):.4f} - Abstractive Loss: {total_loss_abstractiv/len(train_dataloader):.4f}")
         logger("=================================\n")
 
 
@@ -281,21 +289,28 @@ def main(args):
     train_data_ext, temp_data_ext = train_test_split(ext_data, test_size=0.1, random_state=42)
     valid_data_ext, test_data_ext = train_test_split(temp_data_ext, test_size=0.5, random_state=42)
 
-    # keep 5000 samples for training 
-    train_data_abs = train_data_abs[:5000]
-    train_data_ext = train_data_ext[:5000]
+    # drop nans
+    train_data_abs = train_data_abs.dropna()
+    valid_data_abs = valid_data_abs.dropna()
+    test_data_abs = test_data_abs.dropna()
+    ood_data = ood_data.dropna()
+    train_data_ext = train_data_ext.dropna()
+    valid_data_ext = valid_data_ext.dropna()
+    test_data_ext = test_data_ext.dropna()
 
     train_dataset = MultiTaskDataset(tokenizer, qa_data=train_data_ext, summarization_data=train_data_abs)
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
-    validation_dataset = MultiTaskDataset(tokenizer, qa_data=None, summarization_data=valid_data_abs)
+    validation_dataset = MultiTaskDataset(tokenizer, qa_data=valid_data_ext, summarization_data=valid_data_abs)
     valid_dataloader = DataLoader(validation_dataset, batch_size=args.batch_size, shuffle=False)
 
-    test_dataset = MultiTaskDataset(tokenizer, qa_data=None, summarization_data=test_data_abs)
+    test_dataset = MultiTaskDataset(tokenizer, qa_data=test_data_ext, summarization_data=test_data_abs)
     test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
-    ood_dataset = MultiTaskDataset(tokenizer, qa_data=None, summarization_data=ood_data)
+    ood_dataset = MultiTaskDataset(tokenizer, qa_data=test_data_ext, summarization_data=ood_data)
     ood_dataloader = DataLoader(ood_dataset, batch_size=args.batch_size, shuffle=False)
+
+    print(len(train_dataloader))
     
     logger("Data loaded successfully")
     logger(f"EXTRACTIVE TRAIN DATA:{train_data_abs.shape}")
@@ -311,13 +326,13 @@ def main(args):
 
     logger("\nTraining=====================================\n")
 
-    omega, optimizer_omega = None, None
+    omega, omega_optim = None, None
     if WEIGHTING_SETTING[args.weighting_setting] == "relative":
         omega = nn.Parameter(torch.tensor(1, dtype=torch.float), requires_grad=True)
-        optimizer_omega = torch.optim.AdamW([omega], lr=5e-6)
+        omega_optim = torch.optim.AdamW([omega], lr=5e-6)
     elif WEIGHTING_SETTING[args.weighting_setting] == "grad":
         omega = nn.Parameter(torch.tensor([1.0, 1.0]), requires_grad=True)
-        optimizer_omega = AdamW([omega], lr=5e-6)
+        omega_optim = AdamW([omega], lr=5e-6)
 
     train(
         model, 
@@ -332,7 +347,7 @@ def main(args):
         logger,
         num_epochs=args.epochs,
         omega=omega,
-        omega_optim=optimizer_omega
+        omega_optim=omega_optim
     )
 
     logger("\n========================================\n")
