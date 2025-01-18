@@ -9,11 +9,11 @@ class MultiTaskDataset(Dataset):
         self.data = []
         if qa_data is not None:
             for index, row in qa_data.iterrows():
-                self.data.append((row['Article_processed'], row['Summary_1'], 'qa'))
+                self.data.append((row['Article'], row['Summary_1'], 'qa'))
 
         if summarization_data is not None:
             for index, row in summarization_data.iterrows():
-                self.data.append((row['text_preprocessed'], row['headline'], 'abstractive'))
+                self.data.append((row['text'], row['headline'], 'abstractive'))
 
     def __len__(self):
         return len(self.data)
@@ -22,7 +22,8 @@ class MultiTaskDataset(Dataset):
         passage, answer, task = self.data[index]
 
         if task == 'qa' or task == 'abstractive':
-            input_text = "تلخيص: " + passage
+            # input_text = "تلخيص: " + passage
+            input_text = passage
             target_text = answer
         else:
             raise ValueError("Task must be 'qa' or 'abstractive'")

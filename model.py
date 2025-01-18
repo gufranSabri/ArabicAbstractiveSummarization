@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from transformers import T5ForConditionalGeneration, AutoTokenizer
+from transformers import T5ForConditionalGeneration, AutoTokenizer,AutoModelForSeq2SeqLM
 import copy
 import pandas as pd
 from torch.utils.data import DataLoader
@@ -34,9 +34,9 @@ class AraT5_PMTL(nn.Module):
     
 
 if __name__ == "__main__":
-    model_name = "UBC-NLP/AraT5-base"
+    model_name = "UBC-NLP/AraT5v2-base-1024"
+    # model_name = "UBC-NLP/AraT5-base"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)
-
-    model = AraT5_PMTL(model)
+    # model = T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)
+    model = AraT5_PMTL(AutoModelForSeq2SeqLM.from_pretrained(model_name))
     print(model)

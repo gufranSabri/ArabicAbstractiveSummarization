@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import pandas as pd
-from transformers import T5ForConditionalGeneration, AutoTokenizer, AdamW, get_linear_schedule_with_warmup
+from transformers import T5ForConditionalGeneration, AutoTokenizer, AutoModelForSeq2SeqLM, AdamW, get_linear_schedule_with_warmup
 from sklearn.model_selection import train_test_split
 from rouge import Rouge
 
@@ -227,12 +227,12 @@ def train(
         else:
             stagnant_epochs_abstractive += 1
 
+        logger(f"Epoch [{epoch+1}/{num_epochs}] - QA Loss: {total_loss_qa/len(train_dataloader):.4f} - Abstractive Loss: {total_loss_abstractive/len(train_dataloader):.4f}")
+        logger("=================================\n")
+
         if stagnant_epochs_abstractive >= 3:
             logger("Early stopping as abstractive task has not improved for 3 consecutive epochs.")
             return model
-
-        logger(f"Epoch [{epoch+1}/{num_epochs}] - QA Loss: {total_loss_qa/len(train_dataloader):.4f} - Abstractive Loss: {total_loss_abstractiv/len(train_dataloader):.4f}")
-        logger("=================================\n")
 
 
 
@@ -271,9 +271,12 @@ def main(args):
     logger("===============================================\n")
 
     # MODEL LOADING -------------------------------------
-    model_name = "UBC-NLP/AraT5-base"
+    # model_name = "UBC-NLP/AraT5-base"
+    # model_name = "UBC-NLP/AraT5-base-title-generation"
+    model_name = "UBC-NLP/AraT5v2-base-1024"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
+    model = AraT5_PMTL(AutoModelForSeq2SeqLM.from_pretrained(model_name)).to(args.device)
+    # model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
 
     optimizer = AdamW(model.parameters(), lr = 5e-5)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=3000, num_training_steps=66000)
@@ -309,8 +312,6 @@ def main(args):
 
     ood_dataset = MultiTaskDataset(tokenizer, qa_data=test_data_ext, summarization_data=ood_data)
     ood_dataloader = DataLoader(ood_dataset, batch_size=args.batch_size, shuffle=False)
-
-    print(len(train_dataloader))
     
     logger("Data loaded successfully")
     logger(f"EXTRACTIVE TRAIN DATA:{train_data_abs.shape}")
