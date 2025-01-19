@@ -7,6 +7,7 @@ import numpy as np
 import random
 import os
 import argparse
+import datetime
 
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -255,16 +256,28 @@ def main(args):
         torch.backends.cudnn.deterministic=True #replace mps with cudnn here
         torch.backends.cudnn.benchmark = False #replace mps with cudnn here
     
+    date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    if WEIGHTING_SETTING[args.weighting_setting] == "static" and args.single_task == 1:
+        output_file = f"./outputs/{args.model}_aw{args.abstractive_weight}_ew{args.extractive_weight}_dsl{args.decoder_split_level}_bs{args.batch_size}_{date}.txt"
+    elif args.single_task == 0:
+        output_file = f"./outputs/{args.model}_ws{WEIGHTING_SETTING[args.weighting_setting]}_dsl{args.decoder_split_level}_bs{args.batch_size}_{date}.txt"
+    else:
+        output_file = f"./outputs/{args.model}_st{args.single_task}_bs{args.batch_size}_{date}.txt"
 
-    output_file = f"./outputs/{args.model}_aw{args.abstractive_weight}_ew{args.extractive_weight}_bs{args.batch_size}.txt"
     if os.path.exists(output_file):
         os.remove(output_file)
 
     logger = Logger(output_file)
     logger("CONFIGS:")
     logger(f"Model: {args.model}")
-    logger(f"Abstractive Weight: {args.abstractive_weight}")
-    logger(f"Extractive Weight: {args.extractive_weight}")
+    logger(f"Weighting Setting: {WEIGHTING_SETTING[args.weighting_setting]}")
+    logger(f"Single Task: {args.single_task==1}")
+
+    if WEIGHTING_SETTING[args.weighting_setting] == "static" and args.single_task == 0:
+        logger(f"Abstractive Weight: {args.abstractive_weight}")
+        logger(f"Extractive Weight: {args.extractive_weight}")
+        
+    logger(f"Decoder Split Level: {args.decoder_split_level}")
     logger(f"Batch Size: {args.batch_size}")
     logger(f"Epochs: {args.epochs}")
     logger(f"Device: {args.device}")
@@ -275,7 +288,7 @@ def main(args):
     # model_name = "UBC-NLP/AraT5-base-title-generation"
     model_name = "UBC-NLP/AraT5v2-base-1024"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AraT5_PMTL(AutoModelForSeq2SeqLM.from_pretrained(model_name)).to(args.device)
+    model = AraT5_PMTL(AutoModelForSeq2SeqLM.from_pretrained(model_name), decoder_split_level=args.decoder_split_level).to(args.device)
     # model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
 
     optimizer = AdamW(model.parameters(), lr = 5e-5)
@@ -301,16 +314,16 @@ def main(args):
     valid_data_ext = valid_data_ext.dropna()
     test_data_ext = test_data_ext.dropna()
 
-    train_dataset = MultiTaskDataset(tokenizer, qa_data=train_data_ext, summarization_data=train_data_abs)
+    train_dataset = MultiTaskDataset(tokenizer, qa_data=train_data_ext if args.single_task == 0 else None, summarization_data=train_data_abs)
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
-    validation_dataset = MultiTaskDataset(tokenizer, qa_data=valid_data_ext, summarization_data=valid_data_abs)
+    validation_dataset = MultiTaskDataset(tokenizer, qa_data=valid_data_ext if args.single_task == 0 else None, summarization_data=valid_data_abs)
     valid_dataloader = DataLoader(validation_dataset, batch_size=args.batch_size, shuffle=False)
 
-    test_dataset = MultiTaskDataset(tokenizer, qa_data=test_data_ext, summarization_data=test_data_abs)
+    test_dataset = MultiTaskDataset(tokenizer, qa_data=test_data_ext if args.single_task == 0 else None, summarization_data=test_data_abs)
     test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
-    ood_dataset = MultiTaskDataset(tokenizer, qa_data=test_data_ext, summarization_data=ood_data)
+    ood_dataset = MultiTaskDataset(tokenizer, qa_data=test_data_ext if args.single_task == 0 else None, summarization_data=ood_data)
     ood_dataloader = DataLoader(ood_dataset, batch_size=args.batch_size, shuffle=False)
     
     logger("Data loaded successfully")
@@ -364,9 +377,11 @@ def main(args):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--model',dest='model', default='parallel')
+    parser.add_argument('--single_task', dest='single_task', default='0')
     parser.add_argument('--weighting_setting', dest='weighting_setting', default='0')
     parser.add_argument('--abstractive_weight', dest='abstractive_weight', default='0.4')
     parser.add_argument('--extractive_weight', dest='extractive_weight', default='0.6')
+    parser.add_argument('--decoder_split_level', dest='decoder_split_level', default='1')
     parser.add_argument('--batch_size', dest='batch_size', default='8')
     parser.add_argument('--epochs', dest='epochs', default='20')
     parser.add_argument('--device', dest='device', default='cuda')
@@ -374,6 +389,8 @@ if __name__ == '__main__':
 
     args.batch_size = int(args.batch_size)
     args.epochs = int(args.epochs)
+    args.single_task = int(args.single_task)
+    args.decoder_split_level = int(args.decoder_split_level)
     args.abstractive_weight = float(args.abstractive_weight)
     args.extractive_weight = float(args.extractive_weight)
 
