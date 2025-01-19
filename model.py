@@ -15,18 +15,18 @@ class AraT5_PMTL(nn.Module):
 
         if decoder_split_level == 2:
             self.lm_head_abstractive = copy.deepcopy(self.model.lm_head)
-            self.lm_head_extractive = copy.deepcopy(self.model.lm_head)
+            self.lm_head_task2 = copy.deepcopy(self.model.lm_head)
         elif decoder_split_level == 1:
             self.decoder_abstractive = copy.deepcopy(self.model.decoder)
-            self.decoder_extractive = copy.deepcopy(self.model.decoder)
+            self.decoder_task2 = copy.deepcopy(self.model.decoder)
 
         self.decoder_split_level = decoder_split_level
 
     def forward(self, input_ids, attention_mask, labels=None, decoder_attention_mask=None, task=None):
         if self.decoder_split_level == 2:
-            self.model.lm_head = self.lm_head_extractive if task == "qa" else self.lm_head_abstractive
+            self.model.lm_head = self.lm_head_task2 if task == "task2" else self.lm_head_abstractive
         elif self.decoder_split_level == 1:
-            self.model.decoder = self.decoder_extractive if task == "qa" else self.decoder_abstractive
+            self.model.decoder = self.decoder_task2 if task == "task2" else self.decoder_abstractive
         
         return self.model(
             input_ids=input_ids,
@@ -40,9 +40,9 @@ class AraT5_PMTL(nn.Module):
         kwargs.pop("task", None)
 
         if self.decoder_split_level == 2:
-            self.model.lm_head = self.lm_head_extractive if task == "qa" else self.lm_head_abstractive
+            self.model.lm_head = self.lm_head_task2 if task == "task2" else self.lm_head_abstractive
         elif self.decoder_split_level == 1:
-            self.model.decoder = self.decoder_extractive if task == "qa" else self.decoder_abstractive
+            self.model.decoder = self.decoder_task2 if task == "task2" else self.decoder_abstractive
         return self.model.generate(**kwargs)
     
 
