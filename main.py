@@ -344,13 +344,13 @@ def main(args):
     train_dataset = MultiTaskDataset(tokenizer, task2_data=train_data_task2 if args.single_task == 0 else None, summarization_data=train_data_abs)
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
-    validation_dataset = MultiTaskDataset(tokenizer, task2_data=valid_data_task2 if args.single_task == 0 else None, summarization_data=valid_data_abs)
+    validation_dataset = MultiTaskDataset(tokenizer, task2_data=None, summarization_data=valid_data_abs)
     valid_dataloader = DataLoader(validation_dataset, batch_size=args.batch_size, shuffle=False)
 
-    test_dataset = MultiTaskDataset(tokenizer, task2_data=test_data_task2 if args.single_task == 0 else None, summarization_data=test_data_abs)
+    test_dataset = MultiTaskDataset(tokenizer, task2_data= None, summarization_data=test_data_abs)
     test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
-    ood_dataset = MultiTaskDataset(tokenizer, task2_data=test_data_task2 if args.single_task == 0 else None, summarization_data=ood_data)
+    ood_dataset = MultiTaskDataset(tokenizer, task2_data=None, summarization_data=ood_data)
     ood_dataloader = DataLoader(ood_dataset, batch_size=args.batch_size, shuffle=False)
     
     logger("Data loaded successfully")
@@ -409,7 +409,7 @@ if __name__ == '__main__':
     parser.add_argument('--model',dest='model', default='parallel')
     parser.add_argument('--model_version',dest='model_version', default='1')
     parser.add_argument('--single_task', dest='single_task', default='0')
-    parser.add_argument('--weighting_setting', dest='weighting_setting', default='2')
+    parser.add_argument('--weighting_setting', dest='weighting_setting', default='0')
     parser.add_argument('--abstractive_weight', dest='abstractive_weight', default='1.0')
     parser.add_argument('--extractive_weight', dest='extractive_weight', default='1.0')
     parser.add_argument('--decoder_split_level', dest='decoder_split_level', default='1')
