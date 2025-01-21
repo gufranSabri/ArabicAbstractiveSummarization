@@ -1,7 +1,7 @@
 from torch.utils.data import Dataset
 
 class MultiTaskDataset(Dataset):
-    def __init__(self, tokenizer, task2_data=None, summarization_data=None, max_length=128, summary_max_length=40, task2_text_col = "First sentence", task2_label_col="second sentence"):
+    def __init__(self, tokenizer, task2_data=None, summarization_data=None, max_length=144, summary_max_length=45, task2_text_col = "First sentence", task2_label_col="second sentence"):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.summary_max_length = summary_max_length

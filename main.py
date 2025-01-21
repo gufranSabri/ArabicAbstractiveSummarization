@@ -19,6 +19,7 @@ import pandas as pd
 from transformers import T5ForConditionalGeneration, AutoTokenizer, AutoModelForSeq2SeqLM, AdamW, get_linear_schedule_with_warmup
 from sklearn.model_selection import train_test_split
 from rouge import Rouge
+from torch.optim import Adam
 
 from data import MultiTaskDataset
 from model import *
@@ -229,16 +230,16 @@ def train(
                 total_loss = (task2_loss_weight * task2_loss) + (summarization_loss_weight * abstractive_loss)
             total_loss.backward()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
 
-            if eval_accumulation_steps is None or (step + 1) % eval_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
-                optimizer_main.step()
-                scheduler.step()
-                optimizer_main.zero_grad()
+            # if eval_accumulation_steps is None or (step + 1) % eval_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
+            optimizer_main.step()
+            scheduler.step()
+            optimizer_main.zero_grad()
 
-                if omega_optim is not None:
-                    omega_optim.step()
-                    omega_optim.zero_grad()
+            if omega_optim is not None:
+                omega_optim.step()
+                omega_optim.zero_grad()
 
         rouge_scores = evaluate_model(model, valid_dataloader, tokenizer, args, logger)
         if rouge_scores is None:
@@ -318,7 +319,7 @@ def main(args):
     # model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
 
     optimizer = AdamW(model.parameters(), lr = 5e-5)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=3000, num_training_steps=66000)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=66000)
     # MODEL LOADING -------------------------------------
 
     # DATA LOADING --------------------------------------
@@ -414,7 +415,7 @@ if __name__ == '__main__':
     parser.add_argument('--extractive_weight', dest='extractive_weight', default='1.0')
     parser.add_argument('--decoder_split_level', dest='decoder_split_level', default='1')
     parser.add_argument('--batch_size', dest='batch_size', default='8')
-    parser.add_argument('--epochs', dest='epochs', default='20')
+    parser.add_argument('--epochs', dest='epochs', default='7')
     parser.add_argument('--device', dest='device', default='cuda')
     args=parser.parse_args()
 
