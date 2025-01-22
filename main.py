@@ -149,7 +149,7 @@ def train(
         optimizer_weights=None
     ):
 
-    best_abstractive_loss = 0
+    best_abstractive_loss = 10000000
     stagnant_epochs_abstractive = 0
     avg_grad_norms = torch.zeros(2).to(args.device)
 
