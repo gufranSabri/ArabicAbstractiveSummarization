@@ -101,10 +101,11 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, max_summary_lengt
     avg_abstractive_rouge_2 = sum(abstractive_rouge_2_scores) / len(abstractive_rouge_2_scores) if abstractive_rouge_2_scores else 0
     avg_abstractive_rouge_l = sum(abstractive_rouge_l_scores) / len(abstractive_rouge_l_scores) if abstractive_rouge_l_scores else 0
 
-    logger("Task2 ROUGE Scores:")
-    logger(f"  - ROUGE-1: {avg_task2_rouge_1}")
-    logger(f"  - ROUGE-2: {avg_task2_rouge_2}")
-    logger(f"  - ROUGE-L: {avg_task2_rouge_l}")
+    if args.single_task == 0:
+        logger("Task2 ROUGE Scores:")
+        logger(f"  - ROUGE-1: {avg_task2_rouge_1}")
+        logger(f"  - ROUGE-2: {avg_task2_rouge_2}")
+        logger(f"  - ROUGE-L: {avg_task2_rouge_l}")
 
     logger("Abstractive ROUGE Scores:")
     logger(f"  - ROUGE-1: {avg_abstractive_rouge_1}")
@@ -130,7 +131,6 @@ def train(
         valid_dataloader,
         tokenizer,
         optimizer_main,
-        scheduler, 
 
         task2_loss_weight, 
         summarization_loss_weight, 
@@ -149,7 +149,7 @@ def train(
         optimizer_weights=None
     ):
 
-    best_abstractive_rougel = 0
+    best_abstractive_loss = 0
     stagnant_epochs_abstractive = 0
     avg_grad_norms = torch.zeros(2).to(args.device)
 
@@ -158,7 +158,7 @@ def train(
         total_loss_task2 = 0.0
         total_loss_abstractive = 0.0
 
-        for step, batch in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")):
+        for _, batch in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")):
             optimizer_main.zero_grad()
             if omega_optim is not None: omega_optim.zero_grad()
 
@@ -230,11 +230,7 @@ def train(
                 total_loss = (task2_loss_weight * task2_loss) + (summarization_loss_weight * abstractive_loss)
             total_loss.backward()
 
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-
-            # if eval_accumulation_steps is None or (step + 1) % eval_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
             optimizer_main.step()
-            scheduler.step()
             optimizer_main.zero_grad()
 
             if omega_optim is not None:
@@ -246,17 +242,21 @@ def train(
             logger("Skipping evaluation due to errors.")
             continue
 
-        current_abstractive_rougel = rouge_scores["abstractive"]["rouge-l"]
-        if current_abstractive_rougel > best_abstractive_rougel:
-            best_abstractive_rougel = current_abstractive_rougel
+        current_abstractive_loss = total_loss_abstractive/len(train_dataloader)
+        if current_abstractive_loss > best_abstractive_loss:
+            best_abstractive_loss = current_abstractive_loss
             stagnant_epochs_abstractive = 0
         else:
             stagnant_epochs_abstractive += 1
 
-        logger(f"Epoch [{epoch+1}/{num_epochs}] - Task2 Loss: {total_loss_task2/len(train_dataloader):.4f} - Abstractive Loss: {total_loss_abstractive/len(train_dataloader):.4f}")
+        if args.single_task == 1:
+            logger(f"Epoch [{epoch+1}/{num_epochs}] - Abstractive Loss: {total_loss_abstractive/len(train_dataloader):.4f} - Best Abstractive Loss: {best_abstractive_loss:.4f} - Patience: {5-stagnant_epochs_abstractive}")
+        else:
+            logger(f"Epoch [{epoch+1}/{num_epochs}] - Task2 Loss: {total_loss_task2/len(train_dataloader):.4f} - Abstractive Loss: {total_loss_abstractive/len(train_dataloader):.4f}  - Best Abstractive Loss: {best_abstractive_loss:.4f} - Patience: {5-stagnant_epochs_abstractive}")
+
         logger("=================================\n")
 
-        if stagnant_epochs_abstractive >= 3:
+        if stagnant_epochs_abstractive >= 5:
             logger("Early stopping as abstractive task has not improved for 3 consecutive epochs.")
             return model
 
@@ -315,11 +315,9 @@ def main(args):
 
     # MODEL LOADING -------------------------------------
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AraT5_PMTL(AutoModelForSeq2SeqLM.from_pretrained(model_name), decoder_split_level=args.decoder_split_level).to(args.device)
-    # model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
+    model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
 
-    optimizer = AdamW(model.parameters(), lr = 5e-5)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=66000)
+    optimizer = Adam(model.parameters(), lr = 5e-5)
     # MODEL LOADING -------------------------------------
 
     # DATA LOADING --------------------------------------
@@ -383,7 +381,6 @@ def main(args):
         valid_dataloader, 
         tokenizer, 
         optimizer, 
-        scheduler, 
         args.abstractive_weight, 
         args.extractive_weight, 
         args,
@@ -415,7 +412,7 @@ if __name__ == '__main__':
     parser.add_argument('--extractive_weight', dest='extractive_weight', default='1.0')
     parser.add_argument('--decoder_split_level', dest='decoder_split_level', default='1')
     parser.add_argument('--batch_size', dest='batch_size', default='8')
-    parser.add_argument('--epochs', dest='epochs', default='7')
+    parser.add_argument('--epochs', dest='epochs', default='50')
     parser.add_argument('--device', dest='device', default='cuda')
     args=parser.parse_args()
 
