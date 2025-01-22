@@ -243,7 +243,7 @@ def train(
             continue
 
         current_abstractive_loss = total_loss_abstractive/len(train_dataloader)
-        if current_abstractive_loss > best_abstractive_loss:
+        if current_abstractive_loss < best_abstractive_loss:
             best_abstractive_loss = current_abstractive_loss
             stagnant_epochs_abstractive = 0
         else:
