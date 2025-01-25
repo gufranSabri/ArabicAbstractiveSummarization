@@ -22,8 +22,8 @@ class MultiTaskDataset(Dataset):
         passage, answer, task = self.data[index]
 
         if task == 'task2' or task == 'abstractive':
+            # input_text = passage + "summarize: " 
             input_text = "summarize: " + passage
-            input_text = passage
             target_text = answer
         else:
             raise ValueError("Task must be 'task2' or 'abstractive'")
@@ -51,7 +51,7 @@ class MultiTaskDataset(Dataset):
             'input_ids': input_encoding.input_ids.squeeze(0),
             'attention_mask': input_encoding.attention_mask.squeeze(0),
             'labels': labels.squeeze(0),
-            'decoder_attention_mask': target_encoding.attention_mask.squeeze(0),
+            # 'decoder_attention_mask': target_encoding.attention_mask.squeeze(0),
             'task': task
         }
 

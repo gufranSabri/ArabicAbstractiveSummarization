@@ -63,7 +63,7 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, max_summary_lengt
 
             if task2_inputs["input_ids"]:
                 task2_inputs = {k: torch.stack(v) for k, v in task2_inputs.items()}
-                task2_outputs = model.generate(input_ids=task2_inputs["input_ids"], attention_mask=task2_inputs["attention_mask"], max_length=max_summary_length, task='task2')
+                task2_outputs = model.generate(input_ids=task2_inputs["input_ids"], attention_mask=task2_inputs["attention_mask"], max_length=max_summary_length, task='task2', num_beams = 4)
                 generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in task2_outputs]
 
                 target_texts = []
@@ -79,7 +79,7 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, max_summary_lengt
 
             if abstractive_inputs["input_ids"]:
                 abstractive_inputs = {k: torch.stack(v) for k, v in abstractive_inputs.items()}
-                abstractive_outputs = model.generate(input_ids=abstractive_inputs["input_ids"], attention_mask=abstractive_inputs["attention_mask"], max_length=max_summary_length, task='abstractive')
+                abstractive_outputs = model.generate(input_ids=abstractive_inputs["input_ids"], attention_mask=abstractive_inputs["attention_mask"], max_length=max_summary_length, task='abstractive', num_beams = 4)
                 generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in abstractive_outputs]
 
                 target_texts = []
@@ -234,7 +234,7 @@ def train(
                 total_loss = (task2_loss_weight * task2_loss) + (summarization_loss_weight * abstractive_loss)
             total_loss.backward()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             optimizer_main.step()
             optimizer_main.zero_grad()
