@@ -8,6 +8,7 @@ import random
 import os
 import argparse
 import datetime
+from scheduler import LinearDecayLR
 
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -149,9 +150,10 @@ def train(
         optimizer_weights=None
     ):
 
-    best_abstractive_loss = 10000000
+    best_abstractive_rougel = 0
     stagnant_epochs_abstractive = 0
     avg_grad_norms = torch.zeros(2).to(args.device)
+    lr_scheduler=LinearDecayLR(optimizer_main, num_epochs, 15)
 
     for epoch in range(num_epochs):
         model.train()
@@ -162,8 +164,10 @@ def train(
             optimizer_main.zero_grad()
             if omega_optim is not None: omega_optim.zero_grad()
 
-            task2_inputs = {"input_ids": [], "attention_mask": [], "labels": [], "decoder_attention_mask": []}
-            abstractive_inputs = {"input_ids": [], "attention_mask": [], "labels": [], "decoder_attention_mask": []}
+            # task2_inputs = {"input_ids": [], "attention_mask": [], "labels": [], "decoder_attention_mask": []}
+            # abstractive_inputs = {"input_ids": [], "attention_mask": [], "labels": [], "decoder_attention_mask": []}
+            task2_inputs = {"input_ids": [], "attention_mask": [], "labels": []}
+            abstractive_inputs = {"input_ids": [], "attention_mask": [], "labels": []}
 
             for i in range(len(batch['task'])):
                 task = batch['task'][i]
@@ -171,12 +175,12 @@ def train(
                     task2_inputs["input_ids"].append(batch["input_ids"][i])
                     task2_inputs["attention_mask"].append(batch["attention_mask"][i])
                     task2_inputs["labels"].append(batch["labels"][i])
-                    task2_inputs["decoder_attention_mask"].append(batch["decoder_attention_mask"][i])
+                    # task2_inputs["decoder_attention_mask"].append(batch["decoder_attention_mask"][i])
                 elif task == 'abstractive':
                     abstractive_inputs["input_ids"].append(batch["input_ids"][i])
                     abstractive_inputs["attention_mask"].append(batch["attention_mask"][i])
                     abstractive_inputs["labels"].append(batch["labels"][i])
-                    abstractive_inputs["decoder_attention_mask"].append(batch["decoder_attention_mask"][i])
+                    # abstractive_inputs["decoder_attention_mask"].append(batch["decoder_attention_mask"][i])
                 
             task2_loss = 0
             if task2_inputs["input_ids"]:
@@ -185,7 +189,7 @@ def train(
                     input_ids=task2_inputs["input_ids"],
                     attention_mask=task2_inputs["attention_mask"],
                     labels=task2_inputs["labels"],
-                    decoder_attention_mask=task2_inputs["decoder_attention_mask"],
+                    # decoder_attention_mask=task2_inputs["decoder_attention_mask"],
                     task='task2'
                 )
                 task2_loss = task2_outputs.loss
@@ -198,7 +202,7 @@ def train(
                     input_ids=abstractive_inputs["input_ids"],
                     attention_mask=abstractive_inputs["attention_mask"],
                     labels=abstractive_inputs["labels"],
-                    decoder_attention_mask=abstractive_inputs["decoder_attention_mask"],
+                    # decoder_attention_mask=abstractive_inputs["decoder_attention_mask"],
                     task='abstractive'
                 )
                 abstractive_loss = abstractive_outputs.loss
@@ -230,6 +234,8 @@ def train(
                 total_loss = (task2_loss_weight * task2_loss) + (summarization_loss_weight * abstractive_loss)
             total_loss.backward()
 
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             optimizer_main.step()
             optimizer_main.zero_grad()
 
@@ -242,17 +248,21 @@ def train(
             logger("Skipping evaluation due to errors.")
             continue
 
-        current_abstractive_loss = total_loss_abstractive/len(train_dataloader)
-        if current_abstractive_loss < best_abstractive_loss:
-            best_abstractive_loss = current_abstractive_loss
+        lr_scheduler.step()
+
+        current_abstractive_rougel = rouge_scores["abstractive"]["rouge-l"]
+        if current_abstractive_rougel > best_abstractive_rougel:
+            best_abstractive_rougel = current_abstractive_rougel
             stagnant_epochs_abstractive = 0
+            torch.save(model.state_dict(), f"./models/model.pth")
+            print("New Best Score ; Model Saved")
         else:
             stagnant_epochs_abstractive += 1
 
         if args.single_task == 1:
-            logger(f"Epoch [{epoch+1}/{num_epochs}] - Abstractive Loss: {total_loss_abstractive/len(train_dataloader):.4f} - Best Abstractive Loss: {best_abstractive_loss:.4f} - Patience: {5-stagnant_epochs_abstractive}")
+            logger(f"Epoch [{epoch+1}/{num_epochs}] - Abstractive Loss: {total_loss_abstractive/len(train_dataloader):.4f} - Best Abstractive ROUGE-L: {best_abstractive_rougel:.4f} - Patience: {5-stagnant_epochs_abstractive} - LR:  {lr_scheduler.get_lr()[0]}")
         else:
-            logger(f"Epoch [{epoch+1}/{num_epochs}] - Task2 Loss: {total_loss_task2/len(train_dataloader):.4f} - Abstractive Loss: {total_loss_abstractive/len(train_dataloader):.4f}  - Best Abstractive Loss: {best_abstractive_loss:.4f} - Patience: {5-stagnant_epochs_abstractive}")
+            logger(f"Epoch [{epoch+1}/{num_epochs}] - Task2 Loss: {total_loss_task2/len(train_dataloader):.4f} - Abstractive Loss: {total_loss_abstractive/len(train_dataloader):.4f}  - Best Abstractive ROUGE-L: {best_abstractive_rougel:.4f} - Patience: {5-stagnant_epochs_abstractive}")
 
         logger("=================================\n")
 
@@ -317,7 +327,7 @@ def main(args):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
 
-    optimizer = Adam(model.parameters(), lr = 5e-5)
+    optimizer = Adam(model.parameters(), lr = 5e-5, weight_decay=1e-5)
     # MODEL LOADING -------------------------------------
 
     # DATA LOADING --------------------------------------
@@ -378,7 +388,7 @@ def main(args):
     train(
         model, 
         train_dataloader, 
-        valid_dataloader, 
+        test_dataloader, 
         tokenizer, 
         optimizer, 
         args.abstractive_weight, 
@@ -412,7 +422,7 @@ if __name__ == '__main__':
     parser.add_argument('--extractive_weight', dest='extractive_weight', default='1.0')
     parser.add_argument('--decoder_split_level', dest='decoder_split_level', default='1')
     parser.add_argument('--batch_size', dest='batch_size', default='8')
-    parser.add_argument('--epochs', dest='epochs', default='50')
+    parser.add_argument('--epochs', dest='epochs', default='35')
     parser.add_argument('--device', dest='device', default='cuda')
     args=parser.parse_args()
 
