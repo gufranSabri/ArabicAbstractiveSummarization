@@ -9,6 +9,12 @@ from sklearn.model_selection import train_test_split
 
 
 class AraT5_PMTL(nn.Module):
+    '''
+        decoder split level:
+        1: two separate decoders for each task
+        2: two separate lm_heads for each task
+        
+    '''
     def __init__(self, model, decoder_split_level = 2):
         super(AraT5_PMTL, self).__init__()
         self.model = model
