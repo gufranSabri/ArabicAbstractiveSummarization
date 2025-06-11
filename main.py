@@ -388,7 +388,7 @@ def main(args):
     train(
         model, 
         train_dataloader, 
-        test_dataloader, 
+        valid_dataloader, 
         tokenizer, 
         optimizer, 
         args.abstractive_weight, 
