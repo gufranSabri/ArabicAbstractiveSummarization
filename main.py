@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import pandas as pd
-from transformers import T5ForConditionalGeneration, AutoTokenizer, AdamW
+from transformers import T5ForConditionalGeneration, AutoTokenizer, AdamW, AutoModelForSeq2SeqLM
 from sklearn.model_selection import train_test_split
 from rouge import Rouge
 from torch.optim import Adam
@@ -325,7 +325,7 @@ def main(args):
 
     # MODEL LOADING -------------------------------------
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AraT5_PMTL(AutoModelForSeq2SeqLM.from_pretrained(model_name, resume_download=True)).to(args.device)
+    model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
 
     optimizer = Adam(model.parameters(), lr = 5e-5)
     # MODEL LOADING -------------------------------------
@@ -388,7 +388,7 @@ def main(args):
     train(
         model, 
         train_dataloader, 
-        valid_dataloader, 
+        test_dataloader, 
         tokenizer, 
         optimizer, 
         args.abstractive_weight, 
