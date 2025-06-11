@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import pandas as pd
-from transformers import T5ForConditionalGeneration, AutoTokenizer, AutoModelForSeq2SeqLM, AdamW, get_linear_schedule_with_warmup
+from transformers import T5ForConditionalGeneration, AutoTokenizer, AdamW
 from sklearn.model_selection import train_test_split
 from rouge import Rouge
 from torch.optim import Adam
@@ -33,7 +33,7 @@ WEIGHTING_SETTING = {
     "2": "grad"
 }
 
-def evaluate_model(model, dataloader, tokenizer, args, logger, max_summary_length=40):
+def evaluate_model(model, dataloader, tokenizer, args, logger, min_summary_length=5, max_summary_length=40):
     model.eval()
     rouge = Rouge()
 
@@ -63,7 +63,7 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, max_summary_lengt
 
             if task2_inputs["input_ids"]:
                 task2_inputs = {k: torch.stack(v) for k, v in task2_inputs.items()}
-                task2_outputs = model.generate(input_ids=task2_inputs["input_ids"], attention_mask=task2_inputs["attention_mask"], max_length=max_summary_length, task='task2', num_beams = 4)
+                task2_outputs = model.generate(input_ids=task2_inputs["input_ids"], attention_mask=task2_inputs["attention_mask"], min_length=min_summary_length, max_length=max_summary_length, task='task2', num_beams = 3, repetition_penalty=3.0, length_penalty=1.0, no_repeat_ngram_size=3)
                 generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in task2_outputs]
 
                 target_texts = []
@@ -79,7 +79,7 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, max_summary_lengt
 
             if abstractive_inputs["input_ids"]:
                 abstractive_inputs = {k: torch.stack(v) for k, v in abstractive_inputs.items()}
-                abstractive_outputs = model.generate(input_ids=abstractive_inputs["input_ids"], attention_mask=abstractive_inputs["attention_mask"], max_length=max_summary_length, task='abstractive', num_beams = 4)
+                abstractive_outputs = model.generate(input_ids=abstractive_inputs["input_ids"], attention_mask=abstractive_inputs["attention_mask"], min_length=min_summary_length, max_length=max_summary_length, task='abstractive', num_beams = 3, repetition_penalty=3.0, length_penalty=1.0, no_repeat_ngram_size=3)
                 generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in abstractive_outputs]
 
                 target_texts = []
@@ -248,7 +248,7 @@ def train(
             logger("Skipping evaluation due to errors.")
             continue
 
-        lr_scheduler.step()
+        # lr_scheduler.step()
 
         current_abstractive_rougel = rouge_scores["abstractive"]["rouge-l"]
         if current_abstractive_rougel > best_abstractive_rougel:
@@ -325,9 +325,9 @@ def main(args):
 
     # MODEL LOADING -------------------------------------
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
+    model = AraT5_PMTL(AutoModelForSeq2SeqLM.from_pretrained(model_name, resume_download=True)).to(args.device)
 
-    optimizer = Adam(model.parameters(), lr = 5e-5, weight_decay=1e-5)
+    optimizer = Adam(model.parameters(), lr = 5e-5)
     # MODEL LOADING -------------------------------------
 
     # DATA LOADING --------------------------------------
@@ -416,7 +416,7 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--model',dest='model', default='parallel')
     parser.add_argument('--model_version',dest='model_version', default='1')
-    parser.add_argument('--single_task', dest='single_task', default='0')
+    parser.add_argument('--single_task', dest='single_task', default='1')
     parser.add_argument('--weighting_setting', dest='weighting_setting', default='0')
     parser.add_argument('--abstractive_weight', dest='abstractive_weight', default='1.0')
     parser.add_argument('--extractive_weight', dest='extractive_weight', default='1.0')

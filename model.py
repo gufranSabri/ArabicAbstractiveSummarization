@@ -49,6 +49,7 @@ class AraT5_PMTL(nn.Module):
         #     self.model.lm_head = self.lm_head_task2 if task == "task2" else self.lm_head_abstractive
         # elif self.decoder_split_level == 1:
         #     self.model.decoder = self.decoder_task2 if task == "task2" else self.decoder_abstractive
+
         return self.model.generate(**kwargs)
     
 
