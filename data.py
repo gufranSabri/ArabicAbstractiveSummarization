@@ -4,7 +4,7 @@ from arabert.preprocess import ArabertPreprocessor
 class MultiTaskDataset(Dataset):
     def __init__(self, tokenizer, task2_data=None, summarization_data=None,
                  max_length=128, summary_max_length=40, 
-                 task2_text_col="First sentence", task2_label_col="second sentence"):
+                 task2_text_col="Article_processed", task2_label_col="Summary_1"):
 
         self.tokenizer = tokenizer
         self.preprocessor = ArabertPreprocessor(model_name="")

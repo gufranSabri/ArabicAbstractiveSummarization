@@ -46,7 +46,7 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, min_summary_lengt
     abstractive_rouge_l_scores = []
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating"):
+        for batch in tqdm(dataloader, desc="Evaluating", ncols=100):
             task2_inputs = {"input_ids": [], "attention_mask": [], "labels": []}
             abstractive_inputs = {"input_ids": [], "attention_mask": [], "labels": []}
 
@@ -160,7 +160,7 @@ def train(
         total_loss_task2 = 0.0
         total_loss_abstractive = 0.0
 
-        for _, batch in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")):
+        for _, batch in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", ncols=100)):
             optimizer_main.zero_grad()
             if omega_optim is not None: omega_optim.zero_grad()
 
@@ -335,8 +335,8 @@ def main(args):
     valid_data_abs = pd.read_csv('./data/valid_processed.csv')
     test_data_abs= pd.read_csv('./data/test_processed.csv')
     ood_data = pd.read_csv('./data/ood_processed.csv')
-    task2_data = pd.read_csv('./data/paraphrasing_data.csv', delimiter=';')
-    # task2_data = pd.read_csv('./data/extractive_data.csv')
+    # task2_data = pd.read_csv('./data/paraphrasing_data.csv', delimiter=';')
+    task2_data = pd.read_csv('./data/extractive_data.csv')
 
     train_data_task2, temp_data_task2 = train_test_split(task2_data, test_size=0.1, random_state=42)
     valid_data_task2, test_data_task2 = train_test_split(temp_data_task2, test_size=0.5, random_state=42)
@@ -385,22 +385,26 @@ def main(args):
         weights = nn.Parameter(torch.tensor([1.0, 1.0]), requires_grad=True)
         optimizer_weights = AdamW([weights], lr=5e-6)
 
-    train(
-        model, 
-        train_dataloader, 
-        test_dataloader, 
-        tokenizer, 
-        optimizer, 
-        args.abstractive_weight, 
-        args.extractive_weight, 
-        args,
-        logger,
-        num_epochs=args.epochs,
-        omega=omega,
-        omega_optim=omega_optim,
-        weights=weights,
-        optimizer_weights=optimizer_weights
-    )
+    if args.mode == 'train':
+        train(
+            model, 
+            train_dataloader, 
+            test_dataloader, 
+            tokenizer, 
+            optimizer, 
+            args.abstractive_weight, 
+            args.extractive_weight, 
+            args,
+            logger,
+            num_epochs=args.epochs,
+            omega=omega,
+            omega_optim=omega_optim,
+            weights=weights,
+            optimizer_weights=optimizer_weights
+        )
+
+    msg = model.load_state_dict(torch.load(f"./models/model.pth"))
+    print(f"Model loaded successfully: {msg}")
 
     logger("\n========================================\n")
     logger("Evaluating on Test Data")
@@ -414,7 +418,8 @@ def main(args):
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser()
-    parser.add_argument('--model',dest='model', default='parallel')
+    parser.add_argument('--model', dest='model', default='parallel')
+    parser.add_argument('--mode', dest='mode', default='train')
     parser.add_argument('--model_version',dest='model_version', default='1')
     parser.add_argument('--single_task', dest='single_task', default='1')
     parser.add_argument('--weighting_setting', dest='weighting_setting', default='0')
