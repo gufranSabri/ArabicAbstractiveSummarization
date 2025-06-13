@@ -1,11 +1,11 @@
+import os
 import warnings
-import os
+import json
 from tqdm import tqdm
-import os
+from rouge import Rouge
 import pandas as pd
 import numpy as np
 import random
-import os
 import argparse
 import datetime
 from scheduler import LinearDecayLR
@@ -14,13 +14,9 @@ warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
-import pandas as pd
-from transformers import T5ForConditionalGeneration, AutoTokenizer, AdamW, AutoModelForSeq2SeqLM
+from transformers import T5ForConditionalGeneration, AutoTokenizer, AdamW
 from sklearn.model_selection import train_test_split
-from rouge import Rouge
-from torch.optim import Adam
 
 from data import MultiTaskDataset
 from model import *
@@ -33,7 +29,7 @@ WEIGHTING_SETTING = {
     "2": "grad"
 }
 
-def evaluate_model(model, dataloader, tokenizer, args, logger, min_summary_length=5, max_summary_length=40):
+def evaluate_model(model, dataloader, tokenizer, args, logger, min_summary_length=5, max_summary_length=40, run_dir=None, epoch_num=None):
     model.eval()
     rouge = Rouge()
 
@@ -45,10 +41,17 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, min_summary_lengt
     abstractive_rouge_2_scores = []
     abstractive_rouge_l_scores = []
 
+    # Prepare prediction logging
+    prediction_log_path = None
+    if run_dir and epoch_num is not None:
+        prediction_log_path = os.path.join(run_dir, f"epoch_{epoch_num}.txt")
+        prediction_log_file = open(prediction_log_path, "w", encoding="utf-8")
+
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating", ncols=100):
             task2_inputs = {"input_ids": [], "attention_mask": [], "labels": []}
             abstractive_inputs = {"input_ids": [], "attention_mask": [], "labels": []}
+            task2_indices, abstractive_indices = [], []
 
             for i in range(len(batch['task'])):
                 task = batch['task'][i]
@@ -56,42 +59,63 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, min_summary_lengt
                     task2_inputs["input_ids"].append(batch["input_ids"][i].to(args.device))
                     task2_inputs["attention_mask"].append(batch["attention_mask"][i].to(args.device))
                     task2_inputs["labels"].append(batch["labels"][i].to(args.device))
+                    task2_indices.append(i)
                 elif task == 'abstractive':
                     abstractive_inputs["input_ids"].append(batch["input_ids"][i].to(args.device))
                     abstractive_inputs["attention_mask"].append(batch["attention_mask"][i].to(args.device))
                     abstractive_inputs["labels"].append(batch["labels"][i].to(args.device))
+                    abstractive_indices.append(i)
 
-            if task2_inputs["input_ids"]:
-                task2_inputs = {k: torch.stack(v) for k, v in task2_inputs.items()}
-                task2_outputs = model.generate(input_ids=task2_inputs["input_ids"], attention_mask=task2_inputs["attention_mask"], min_length=min_summary_length, max_length=max_summary_length, task='task2', num_beams = 3, repetition_penalty=3.0, length_penalty=1.0, no_repeat_ngram_size=3)
-                generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in task2_outputs]
+            def decode_predictions(inputs, task_name, indices):
+                nonlocal prediction_log_file
+                if not inputs["input_ids"]:
+                    return [], []
+
+                inputs = {k: torch.stack(v) for k, v in inputs.items()}
+                outputs = model.generate(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    min_length=min_summary_length,
+                    max_length=max_summary_length,
+                    task=task_name,
+                    num_beams=3,
+                    repetition_penalty=3.0,
+                    length_penalty=1.0,
+                    no_repeat_ngram_size=3
+                )
+                generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in outputs]
 
                 target_texts = []
-                for t in task2_inputs["labels"]:
+                for t in inputs["labels"]:
                     t = t[t != -100]  # Remove -100 tokens
                     target_texts.append(tokenizer.decode(t, skip_special_tokens=True))
 
-                for g_text, t_text in zip(generated_texts, target_texts):
-                    scores = rouge.get_scores(g_text, t_text)[0]
-                    task2_rouge_1_scores.append(scores['rouge-1']['f'])
-                    task2_rouge_2_scores.append(scores['rouge-2']['f'])
-                    task2_rouge_l_scores.append(scores['rouge-l']['f'])
+                for i, (g_text, t_text) in enumerate(zip(generated_texts, target_texts)):
+                    if prediction_log_file:
+                        prediction_log_file.write(f"[{task_name.upper()}] Sample {indices[i]}:\n")
+                        prediction_log_file.write(f"Prediction: {g_text}\n")
+                        prediction_log_file.write(f"Target:     {t_text}\n")
+                        prediction_log_file.write("\n")
 
-            if abstractive_inputs["input_ids"]:
-                abstractive_inputs = {k: torch.stack(v) for k, v in abstractive_inputs.items()}
-                abstractive_outputs = model.generate(input_ids=abstractive_inputs["input_ids"], attention_mask=abstractive_inputs["attention_mask"], min_length=min_summary_length, max_length=max_summary_length, task='abstractive', num_beams = 3, repetition_penalty=3.0, length_penalty=1.0, no_repeat_ngram_size=3)
-                generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in abstractive_outputs]
+                return generated_texts, target_texts
 
-                target_texts = []
-                for t in abstractive_inputs["labels"]:
-                    t = t[t != -100]  # Remove -100 tokens
-                    target_texts.append(tokenizer.decode(t, skip_special_tokens=True))
+            # Evaluate and log
+            task2_preds, task2_targets = decode_predictions(task2_inputs, 'task2', task2_indices)
+            for g_text, t_text in zip(task2_preds, task2_targets):
+                scores = rouge.get_scores(g_text, t_text)[0]
+                task2_rouge_1_scores.append(scores['rouge-1']['f'])
+                task2_rouge_2_scores.append(scores['rouge-2']['f'])
+                task2_rouge_l_scores.append(scores['rouge-l']['f'])
 
-                for g_text, t_text in zip(generated_texts, target_texts):
-                    scores = rouge.get_scores(g_text, t_text)[0]
-                    abstractive_rouge_1_scores.append(scores['rouge-1']['f'])
-                    abstractive_rouge_2_scores.append(scores['rouge-2']['f'])
-                    abstractive_rouge_l_scores.append(scores['rouge-l']['f'])
+            abstractive_preds, abstractive_targets = decode_predictions(abstractive_inputs, 'abstractive', abstractive_indices)
+            for g_text, t_text in zip(abstractive_preds, abstractive_targets):
+                scores = rouge.get_scores(g_text, t_text)[0]
+                abstractive_rouge_1_scores.append(scores['rouge-1']['f'])
+                abstractive_rouge_2_scores.append(scores['rouge-2']['f'])
+                abstractive_rouge_l_scores.append(scores['rouge-l']['f'])
+
+    if prediction_log_file:
+        prediction_log_file.close()
 
     # Calculate average ROUGE scores
     avg_task2_rouge_1 = sum(task2_rouge_1_scores) / len(task2_rouge_1_scores) if task2_rouge_1_scores else 0
@@ -126,6 +150,7 @@ def evaluate_model(model, dataloader, tokenizer, args, logger, min_summary_lengt
         }
     }
 
+
 def train(
         model, 
         train_dataloader,
@@ -147,7 +172,9 @@ def train(
         omega_optim=None,
 
         weights=None,
-        optimizer_weights=None
+        optimizer_weights=None,
+
+        run_dir=None
     ):
 
     best_abstractive_rougel = 0
@@ -234,8 +261,6 @@ def train(
                 total_loss = (task2_loss_weight * task2_loss) + (summarization_loss_weight * abstractive_loss)
             total_loss.backward()
 
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
             optimizer_main.step()
             optimizer_main.zero_grad()
 
@@ -243,18 +268,18 @@ def train(
                 omega_optim.step()
                 omega_optim.zero_grad()
 
-        rouge_scores = evaluate_model(model, valid_dataloader, tokenizer, args, logger)
+        rouge_scores = evaluate_model(model, valid_dataloader, tokenizer, args, logger, run_dir=run_dir, epoch_num=args.epochs)
         if rouge_scores is None:
             logger("Skipping evaluation due to errors.")
             continue
 
-        # lr_scheduler.step()
+        lr_scheduler.step()
 
         current_abstractive_rougel = rouge_scores["abstractive"]["rouge-l"]
         if current_abstractive_rougel > best_abstractive_rougel:
             best_abstractive_rougel = current_abstractive_rougel
             stagnant_epochs_abstractive = 0
-            torch.save(model.state_dict(), f"./models/model.pth")
+            torch.save(run_dir, f"model.pth")
             print("New Best Score ; Model Saved")
         else:
             stagnant_epochs_abstractive += 1
@@ -271,160 +296,153 @@ def train(
             return model
 
 
-
 def main(args):
     seed = 42
     random.seed(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    #FOR MAC --------------------------------------------
+    # FOR MAC --------------------------------------------
     if args.device == "mps":
         torch.mps.manual_seed(seed)
-        torch.backends.mps.deterministic=True
+        torch.backends.mps.deterministic = True
         torch.backends.mps.benchmark = False
 
-    #FOR WINDOWS AND LINUX ------------------------------
+    # FOR WINDOWS AND LINUX ------------------------------
     if args.device == "cuda":
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic=True #replace mps with cudnn here
-        torch.backends.cudnn.benchmark = False #replace mps with cudnn here
-    
-    date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    if WEIGHTING_SETTING[args.weighting_setting] == "static" and args.single_task == 1:
-        output_file = f"./outputs/{args.model}_aw{args.abstractive_weight}_ew{args.extractive_weight}_dsl{args.decoder_split_level}_bs{args.batch_size}_{date}.txt"
-    elif args.single_task == 0:
-        output_file = f"./outputs/{args.model}_ws{WEIGHTING_SETTING[args.weighting_setting]}_dsl{args.decoder_split_level}_bs{args.batch_size}_{date}.txt"
-    else:
-        output_file = f"./outputs/{args.model}_st{args.single_task}_bs{args.batch_size}_{date}.txt"
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    # === SETUP RUN DIRECTORY =============================
+    if args.mode == 'train':
+        date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        run_dir = f"./outputs/{args.model}_{date}"
+        os.makedirs(run_dir, exist_ok=True)
 
+        # Save configuration
+        config_dict = vars(args).copy()
+        config_dict["WEIGHTING_SETTING"] = WEIGHTING_SETTING[args.weighting_setting]
+        config_dict["date"] = date
+        config_path = os.path.join(run_dir, "config.json")
+        with open(config_path, 'w') as f:
+            json.dump(config_dict, f, indent=4)
+
+    elif args.mode == 'val':
+        assert args.eval_path is not None, "Please provide --eval_path for validation mode"
+        run_dir = args.eval_path
+        config_path = os.path.join(run_dir, "config.json")
+        assert os.path.exists(config_path), f"{config_path} does not exist"
+        with open(config_path, 'r') as f:
+            config_dict = json.load(f)
+        for k, v in config_dict.items():
+            setattr(args, k, v)
+
+    # Setup logger
+    log_path = os.path.join(run_dir, "log.txt")
+    if os.path.exists(log_path):
+        os.remove(log_path)
+    logger = Logger(log_path)
+
+    # === LOG CONFIG ======================================
     model_name = "UBC-NLP/AraT5-base"
-    if args.model_version == "2":
-        model_name = "UBC-NLP/AraT5v2-base-1024"
-
-    logger = Logger(output_file)
     logger("CONFIGS:")
-    logger(f"Model Name: {model_name}")
-    logger(f"Model: {args.model}")
-    logger(f"Weighting Setting: {WEIGHTING_SETTING[args.weighting_setting]}")
-    logger(f"Single Task: {args.single_task==1}")
-
-    if WEIGHTING_SETTING[args.weighting_setting] == "static" and args.single_task == 0:
-        logger(f"Abstractive Weight: {args.abstractive_weight}")
-        logger(f"Extractive Weight: {args.extractive_weight}")
-        
-    logger(f"Decoder Split Level: {args.decoder_split_level}")
-    logger(f"Batch Size: {args.batch_size}")
-    logger(f"Epochs: {args.epochs}")
-    logger(f"Device: {args.device}")
+    for k, v in vars(args).items():
+        logger(f"{k}: {v}")
     logger("===============================================\n")
 
-    # MODEL LOADING -------------------------------------
+    # === MODEL LOADING ===================================
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AraT5_PMTL(T5ForConditionalGeneration.from_pretrained(model_name, resume_download=True)).to(args.device)
+    optimizer = AdamW(model.parameters(), lr=5e-5)
 
-    optimizer = Adam(model.parameters(), lr = 5e-5)
-    # MODEL LOADING -------------------------------------
-
-    # DATA LOADING --------------------------------------
-    train_data_abs = pd.read_csv('./data/train1_processed.csv')
-    valid_data_abs = pd.read_csv('./data/valid_processed.csv')
-    test_data_abs= pd.read_csv('./data/test_processed.csv')
-    ood_data = pd.read_csv('./data/ood_processed.csv')
-    # task2_data = pd.read_csv('./data/paraphrasing_data.csv', delimiter=';')
-    task2_data = pd.read_csv('./data/extractive_data.csv')
+    # === DATA LOADING ====================================
+    train_data_abs = pd.read_csv('./data/train1_processed.csv').dropna()
+    valid_data_abs = pd.read_csv('./data/valid_processed.csv').dropna()
+    test_data_abs = pd.read_csv('./data/test_processed.csv').dropna()
+    ood_data = pd.read_csv('./data/ood_processed.csv').dropna()
+    task2_data = pd.read_csv('./data/extractive_data.csv').dropna()
 
     train_data_task2, temp_data_task2 = train_test_split(task2_data, test_size=0.1, random_state=42)
     valid_data_task2, test_data_task2 = train_test_split(temp_data_task2, test_size=0.5, random_state=42)
 
-    # drop nans
-    train_data_abs = train_data_abs.dropna()
-    valid_data_abs = valid_data_abs.dropna()
-    test_data_abs = test_data_abs.dropna()
-    ood_data = ood_data.dropna()
-    train_data_task2 = train_data_task2.dropna()
-    valid_data_task2 = valid_data_task2.dropna()
-    test_data_task2 = test_data_task2.dropna()
-
     train_dataset = MultiTaskDataset(tokenizer, task2_data=train_data_task2 if args.single_task == 0 else None, summarization_data=train_data_abs)
-    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-
-    validation_dataset = MultiTaskDataset(tokenizer, task2_data=None, summarization_data=valid_data_abs)
-    valid_dataloader = DataLoader(validation_dataset, batch_size=args.batch_size, shuffle=False)
-
-    test_dataset = MultiTaskDataset(tokenizer, task2_data= None, summarization_data=test_data_abs)
-    test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-
+    valid_dataset = MultiTaskDataset(tokenizer, task2_data=valid_data_task2, summarization_data=valid_data_abs)
+    test_dataset = MultiTaskDataset(tokenizer, task2_data=test_data_task2, summarization_data=test_data_abs)
     ood_dataset = MultiTaskDataset(tokenizer, task2_data=None, summarization_data=ood_data)
+
+    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    valid_dataloader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False)
+    test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
     ood_dataloader = DataLoader(ood_dataset, batch_size=args.batch_size, shuffle=False)
-    
+
     logger("Data loaded successfully")
-    logger(f"EXTRACTIVE TRAIN DATA:{train_data_abs.shape}")
-    logger(f"EXTRACTIVE VALID DATA:{valid_data_abs.shape}")
-    logger(f"EXTRACTIVE TEST DATA:{test_data_abs.shape}")
-    logger("\n")
-    logger(f"ABSTRACTIVE TRAIN DATA:{train_data_task2.shape}")
-    logger(f"ABSTRACTIVE VALID DATA:{valid_data_task2.shape}")
-    logger(f"ABSTRACTIVE TEST DATA:{test_data_task2.shape}")
-    logger("\n")
-    logger(f"OOD DATA:{ood_data.shape}")
-    # DATA LOADING --------------------------------------
+    logger(f"EXTRACTIVE TRAIN DATA: {train_data_abs.shape}")
+    logger(f"EXTRACTIVE VALID DATA: {valid_data_abs.shape}")
+    logger(f"EXTRACTIVE TEST DATA: {test_data_abs.shape}\n")
+    logger(f"ABSTRACTIVE TRAIN DATA: {train_data_task2.shape}")
+    logger(f"ABSTRACTIVE VALID DATA: {valid_data_task2.shape}")
+    logger(f"ABSTRACTIVE TEST DATA: {test_data_task2.shape}\n")
+    logger(f"OOD DATA: {ood_data.shape}")
 
-    logger("\nTraining=====================================\n")
-
+    # === TRAIN OR VALIDATE ===============================
     omega, omega_optim = None, None
     weights, optimizer_weights = None, None
+
     if WEIGHTING_SETTING[args.weighting_setting] == "relative":
-        omega = nn.Parameter(torch.tensor(1, dtype=torch.float), requires_grad=True)
+        omega = torch.nn.Parameter(torch.tensor(1.0, dtype=torch.float), requires_grad=True)
         omega_optim = torch.optim.AdamW([omega], lr=5e-6)
+
     elif WEIGHTING_SETTING[args.weighting_setting] == "grad":
-        weights = nn.Parameter(torch.tensor([1.0, 1.0]), requires_grad=True)
-        optimizer_weights = AdamW([weights], lr=5e-6)
+        weights = torch.nn.Parameter(torch.tensor([1.0, 1.0]), requires_grad=True)
+        optimizer_weights = torch.optim.AdamW([weights], lr=5e-6)
 
     if args.mode == 'train':
+        logger("\nTraining=====================================\n")
         train(
-            model, 
-            train_dataloader, 
-            test_dataloader, 
-            tokenizer, 
-            optimizer, 
-            args.abstractive_weight, 
-            args.extractive_weight, 
+            model,
+            train_dataloader,
+            valid_dataloader,
+            tokenizer,
+            optimizer,
+            args.abstractive_weight,
+            args.task2_weight,
             args,
             logger,
             num_epochs=args.epochs,
             omega=omega,
             omega_optim=omega_optim,
             weights=weights,
-            optimizer_weights=optimizer_weights
+            optimizer_weights=optimizer_weights,
+            run_dir=run_dir  # pass directory to save best model
         )
 
-    msg = model.load_state_dict(torch.load(f"./models/model.pth"))
-    print(f"Model loaded successfully: {msg}")
+    # Load best checkpoint
+    ckpt_path = os.path.join(run_dir, "model.pth")
+    msg = model.load_state_dict(torch.load(ckpt_path, map_location=args.device))
+    logger(f"Model loaded from {ckpt_path} with msg: {msg}")
 
+    # === EVALUATE ========================================
     logger("\n========================================\n")
     logger("Evaluating on Test Data")
-    evaluate_model(model, test_dataloader, tokenizer, args, logger)
+    evaluate_model(model, test_dataloader, tokenizer, args, logger, run_dir=run_dir, epoch_num=99999)
 
     logger("\n========================================\n")
     logger("Evaluating on OOD Data")
-    evaluate_model(model, ood_dataloader, tokenizer, args, logger)
+    evaluate_model(model, ood_dataloader, tokenizer, args, logger, run_dir=run_dir, epoch_num=99999)
+
 
     
-
 if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--model', dest='model', default='parallel')
     parser.add_argument('--mode', dest='mode', default='train')
-    parser.add_argument('--model_version',dest='model_version', default='1')
+    parser.add_argument('--eval_path', dest='eval_path', default='')
     parser.add_argument('--single_task', dest='single_task', default='1')
     parser.add_argument('--weighting_setting', dest='weighting_setting', default='0')
     parser.add_argument('--abstractive_weight', dest='abstractive_weight', default='1.0')
-    parser.add_argument('--extractive_weight', dest='extractive_weight', default='1.0')
+    parser.add_argument('--task2_weight', dest='task2_weight', default='1.0')
     parser.add_argument('--decoder_split_level', dest='decoder_split_level', default='1')
     parser.add_argument('--batch_size', dest='batch_size', default='8')
     parser.add_argument('--epochs', dest='epochs', default='35')
@@ -436,7 +454,9 @@ if __name__ == '__main__':
     args.single_task = int(args.single_task)
     args.decoder_split_level = int(args.decoder_split_level)
     args.abstractive_weight = float(args.abstractive_weight)
-    args.extractive_weight = float(args.extractive_weight)
+    args.task2_weight = float(args.task2_weight)
+
+    assert os.path.exists(args.eval_path) or args.mode == 'train', "Evaluation path does not exist. Please provide a valid path or run in training mode."
 
     if not torch.cuda.is_available():
         args.device='mps'
