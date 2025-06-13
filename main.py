@@ -268,7 +268,7 @@ def train(
                 omega_optim.step()
                 omega_optim.zero_grad()
 
-        rouge_scores = evaluate_model(model, valid_dataloader, tokenizer, args, logger, run_dir=run_dir, epoch_num=args.epochs)
+        rouge_scores = evaluate_model(model, valid_dataloader, tokenizer, args, logger, run_dir=run_dir, epoch_num=epoch)
         if rouge_scores is None:
             logger("Skipping evaluation due to errors.")
             continue
@@ -279,7 +279,7 @@ def train(
         if current_abstractive_rougel > best_abstractive_rougel:
             best_abstractive_rougel = current_abstractive_rougel
             stagnant_epochs_abstractive = 0
-            torch.save(run_dir, f"model.pth")
+            torch.save(model.state_dict(), os.path.join(run_dir, "model.pth"))
             print("New Best Score ; Model Saved")
         else:
             stagnant_epochs_abstractive += 1
@@ -446,7 +446,7 @@ if __name__ == '__main__':
     parser.add_argument('--decoder_split_level', dest='decoder_split_level', default='1')
     parser.add_argument('--batch_size', dest='batch_size', default='8')
     parser.add_argument('--epochs', dest='epochs', default='35')
-    parser.add_argument('--device', dest='device', default='cuda')
+    parser.add_argument('--device', dest='device', default='cuda:1')
     args=parser.parse_args()
 
     args.batch_size = int(args.batch_size)
